@@ -10,6 +10,8 @@ from threading import Thread
 import os
 import discord
 
+import datetime
+
 app = Flask('')
 
 @app.route('/')
@@ -47,7 +49,37 @@ async def on_member_join(member):
 BANNED_WORDS = {
     "malaka",'βλακα', "malakas", "poustr", "gamo","poutana","hlithie",'βλακας','μαλακας','πουστης','γαμω','πουτανα','ηλιθιε','χαζε','χαζος','ηλιθιος','χαζο','μαλακα','πουστρακι','γαμωτο','πουτανακι','ηλιθια','χαζομαρα',"βλακας", "μαλακας", "πουστης", "γκαμο", "πουτανα", "ηλιθιε", 'πουστρα'
 }
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def kick(ctx, member: discord.Member, *, reason=None):
+    try:
+        await member.kick(reason=reason)
+        await ctx.send(f'👢 Ο χρήστης {member.mention} έφαγε kick! Αιτία: {reason}')
+    except Exception as e:
+        await ctx.send(f'❌ Δεν μπόρεσα να κάνω kick τον χρήστη: {e}')
 
+# --- COMMAND ΓΙΑ MUTE (TIMEOUT) ---
+@bot.command()
+@commands.has_permissions(moderate_members=True)
+async def mute(ctx, member: discord.Member, minutes: int, *, reason=None):
+    try:
+        # Ορίζουμε τη διάρκεια του timeout
+        duration = datetime.timedelta(minutes=minutes)
+        await member.timeout(duration, reason=reason)
+        await ctx.send(f'🤫 Ο χρήστης {member.mention} έφαγε mute για {minutes} λεπτά! Αιτία: {reason}')
+    except Exception as e:
+        await ctx.send(f'❌ Δεν μπόρεσα να κάνω mute τον χρήστη: {e}')
+
+# --- COMMAND ΓΙΑ UNMUTE (REMOVE TIMEOUT) ---
+@bot.command()
+@commands.has_permissions(moderate_members=True)
+async def unmute(ctx, member: discord.Member):
+    try:
+        await member.timeout(None)
+        await ctx.send(f'🔊 Ο χρήστης {member.mention} έγινε unmute!')
+    except Exception as e:
+        await ctx.send(f'❌ Δεν μπόρεσα να κάνω unmute τον χρήστη: {e}')
+        
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
