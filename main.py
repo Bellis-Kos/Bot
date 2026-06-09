@@ -93,4 +93,4 @@ async def clear(ctx, amount: int):
 keep_alive()
 token = os.getenv("DISCORD_TOKEN")
 
-bot.run(token, log_handler=handler, log_level=logging.DEBUG)
+bot.run(token)
