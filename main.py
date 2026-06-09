@@ -26,7 +26,7 @@ def keep_alive():
     t.start()
 
 load_dotenv()
-token = os.getenv("DISCORD_TOKEN") or os.environ.get("DISCORD_TOKEN") 
+token = os.getenv("DISCORD_TOKEN")
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 intents = discord.Intents.default()
@@ -91,6 +91,9 @@ async def clear(ctx, amount: int):
     await confirm_msg.delete(delay=3)
 
 keep_alive()
-token = os.getenv("DISCORD_TOKEN")
+FINAL_TOKEN = os.getenv("DISCORD_TOKEN") or token
 
-bot.run(token)
+if not FINAL_TOKEN:
+    print("❌ ΣΦΑΛΜΑ: Δεν βρέθηκε κανένα Discord Token!")
+else:
+    bot.run(FINAL_TOKEN)
