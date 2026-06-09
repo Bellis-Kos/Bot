@@ -5,6 +5,26 @@ from dotenv import load_dotenv
 import os
 import asyncio  # Χρειάζεται για το sleep!
 
+from flask import Flask
+from threading import Thread
+import os
+import discord
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    # Το Render δίνει αυτόματα μια Port, πρέπει να την ακούσουμε
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
@@ -25,7 +45,7 @@ async def on_member_join(member):
     await member.send(f'Welcome to the server, {member.name}!')
 
 BANNED_WORDS = {
-    "malaka", "malakas", "poustr", "gamo","poutana","hlithie",'βλακας','μαλακας','πουστης','γαμω','πουτανα','ηλιθιε','χαζε','χαζος','ηλιθιος','χαζο','μαλακα','πουστρακι','γαμωτο','πουτανακι','ηλιθια','χαζομαρα',"βλακας", "μαλακας", "πουστης", "γκαμο", "πουτανα", "ηλιθιε", 'πουστρα'
+    "malaka",'βλακα', "malakas", "poustr", "gamo","poutana","hlithie",'βλακας','μαλακας','πουστης','γαμω','πουτανα','ηλιθιε','χαζε','χαζος','ηλιθιος','χαζο','μαλακα','πουστρακι','γαμωτο','πουτανακι','ηλιθια','χαζομαρα',"βλακας", "μαλακας", "πουστης", "γκαμο", "πουτανα", "ηλιθιε", 'πουστρα'
 }
 
 @bot.event
@@ -38,7 +58,7 @@ async def on_message(message):
     if any(word in message_content_lower for word in BANNED_WORDS):
         try:
             await message.delete()
-            await message.channel.send(f'{message.author.mention}, Πρόσεχε τις εκφράσεις σου!')
+            await message.channel.send(f'{message.author.mention}, Πρόσεχε μουνόπανο!')
         except Exception as e:
             print(f"Δεν μπόρεσα να διαγράψω το μήνυμα: {e}")
         return 
@@ -69,5 +89,8 @@ async def clear(ctx, amount: int):
     
     # 5. Σβήνει την επιβεβαίωση μετά από 3 δευτερόλεπτα
     await confirm_msg.delete(delay=3)
+
+keep_alive()
+token = os.getenv("DISCORD_TOKEN")
 
 bot.run(token, log_handler=handler, log_level=logging.DEBUG)
