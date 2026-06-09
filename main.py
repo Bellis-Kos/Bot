@@ -10,8 +10,6 @@ from threading import Thread
 import os
 import discord
 
-import datetime
-
 app = Flask('')
 
 @app.route('/')
@@ -28,7 +26,7 @@ def keep_alive():
     t.start()
 
 load_dotenv()
-token = os.getenv("DISCORD_TOKEN")
+token = os.getenv('DISCORD_TOKEN')
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 intents = discord.Intents.default()
@@ -47,39 +45,18 @@ async def on_member_join(member):
     await member.send(f'Welcome to the server, {member.name}!')
 
 BANNED_WORDS = {
-    "malaka",'βλακα', "malakas", "poustr", "gamo","poutana","hlithie",'βλακας','μαλακας','πουστης','γαμω','πουτανα','ηλιθιε','χαζε','χαζος','ηλιθιος','χαζο','μαλακα','πουστρακι','γαμωτο','πουτανακι','ηλιθια','χαζομαρα',"βλακας", "μαλακας", "πουστης", "γκαμο", "πουτανα", "ηλιθιε", 'πουστρα'
-}
-@bot.command()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason=None):
-    try:
-        await member.kick(reason=reason)
-        await ctx.send(f'👢 Ο χρήστης {member.mention} έφαγε kick! Αιτία: {reason}')
-    except Exception as e:
-        await ctx.send(f'❌ Δεν μπόρεσα να κάνω kick τον χρήστη: {e}')
+    'μουνόπανο','μουνοπανο','μουνόπανα','μουνοπανα','μουνόπανος','μουνοπανος',
+    'γαμημένο','γαμημενο','γαμημένα','γαμημενα','γαμημένος','γαμημενος',
+    'καριόλη','καριολη','καριόλες','καριολες','καριόλης','καριολης',
+    'πουτάνα','πουτανα','πουτάνες','πουτανα','πουτάνος','πουτανος',
+    'παιδόφιλος','παιδοφιλος','παιδόφιλοι','παιδοφιλοι','παιδόφιλος','παιδοφιλος',
+    'μαλάκας','μαλακας','μαλάκες','μαλακες','μαλάκης','μαλακης','μαλακία','μαλακια','μαλακας','μαλάκας','μαλακία','μαλακια','μαλακας',
+    'βλάκας','βλακας','βλάκες','βλακες','βλάκης','βλακης',
+    'ηλίθιος','ηλιθιος','ηλίθιοι','ηλιθιοι', 'ηλίθια','ηλιθια','παπάρας', 'παπαρας', 'παπάρες', 'παπαρες', 'παπάρος', 'παπαρος'
+    'αρχίδι','αρχιδι','αρχίδια','αρχιδια','αρχίδιος','αρχιδιος',
+    'πούτσα','πούτσα','πούτσες','πούτσες','πούτσος','πούτσος'
+    }
 
-# --- COMMAND ΓΙΑ MUTE (TIMEOUT) ---
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def mute(ctx, member: discord.Member, minutes: int, *, reason=None):
-    try:
-        # Ορίζουμε τη διάρκεια του timeout
-        duration = datetime.timedelta(minutes=minutes)
-        await member.timeout(duration, reason=reason)
-        await ctx.send(f'🤫 Ο χρήστης {member.mention} έφαγε mute για {minutes} λεπτά! Αιτία: {reason}')
-    except Exception as e:
-        await ctx.send(f'❌ Δεν μπόρεσα να κάνω mute τον χρήστη: {e}')
-
-# --- COMMAND ΓΙΑ UNMUTE (REMOVE TIMEOUT) ---
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def unmute(ctx, member: discord.Member):
-    try:
-        await member.timeout(None)
-        await ctx.send(f'🔊 Ο χρήστης {member.mention} έγινε unmute!')
-    except Exception as e:
-        await ctx.send(f'❌ Δεν μπόρεσα να κάνω unmute τον χρήστη: {e}')
-        
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -123,9 +100,6 @@ async def clear(ctx, amount: int):
     await confirm_msg.delete(delay=3)
 
 keep_alive()
-FINAL_TOKEN = os.getenv("DISCORD_TOKEN") or token
+token = os.getenv("DISCORD_TOKEN")
 
-if not FINAL_TOKEN:
-    print("❌ ΣΦΑΛΜΑ: Δεν βρέθηκε κανένα Discord Token!")
-else:
-    bot.run(FINAL_TOKEN)
+bot.run(token, log_handler=handler, log_level=logging.DEBUG)
