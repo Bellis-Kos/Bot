@@ -91,7 +91,11 @@ async def on_message(message):
 
     # Επιτρέπει στα commands να δουλέψουν σωστά παράλληλα με το on_message
     await bot.process_commands(message)
-
+@bot.command()
+async def ping(ctx):
+    latency = round(bot.latency * 1000) 
+    await ctx.send(f'🏓 Pong! Το ping μου είναι **{latency}ms**.') 
+    
 @bot.command(aliases=['hi'])
 async def hello(ctx):
     await ctx.send(f'Hello, {ctx.author.name}!')
