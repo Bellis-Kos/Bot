@@ -51,12 +51,12 @@ BANNED_WORDS = {
     'πουτανα', 'πουτανες', 'πουτανος',
     'παιδοφιλος', 'παιδοφιλοι',
     'μαλακας', 'μαλακες', 'μαλακης', 'μαλακια',
-    'βλακας', 'βλακες', 'βλακης',
+    'βλακας', 'βλακες', 'βλακης','βλακα΄,'βλαμενε'
     'ηλιθιος', 'ηλιθιοι', 'ηλιθια', 
     'παπαρας', 'παπαρες', 'παπαρος',
     'αρχιδι', 'αρχιδια', 'αρχιδιος',
     'πουτσα', 'πουτσες', 'πουτσος'
-    'shit'
+    'shit','καθυστερημενος','καθυστερημενη','καθυστερημενο'
 }
 
 def clean_text(text):
@@ -84,7 +84,7 @@ async def on_message(message):
     if any(word in clean_message for word in BANNED_WORDS):
         try:
             await message.delete()
-            await message.channel.send(f'{message.author.mention}, Πρόσεχε τις εκφράσεις σου!')
+            await message.channel.send(f'{message.author.mention}, Πρόσεχε μουνόπανο!')
         except Exception as e:
             print(f"Δεν μπόρεσα να διαγράψω το μήνυμα: {e}")
         return 
