@@ -96,13 +96,7 @@ async def on_message(message):
 async def ping(ctx):
     latency = round(bot.latency * 1000) 
     await ctx.send(f'🏓 Pong! Το ping μου είναι **{latency}ms**.') 
-
-@bot.command()
-async def ping(ctx):
-    # Παίρνει την καθυστέρηση από το Discord API σε χιλιοστά του δευτερολέπτου (ms)
-    latency = round(bot.latency * 1000) 
-    await ctx.send(f'🏓 Pong! Το ping μου είναι **{latency}ms**.')
-
+    
 @bot.command(aliases=['hi'])
 async def hello(ctx):
     await ctx.send(f'Hello, {ctx.author.name}!')
