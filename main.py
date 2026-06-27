@@ -77,7 +77,7 @@ async def on_message(message):
     if any(word in clean_message for word in BANNED_WORDS):
         try:
             await message.delete()
-            await message.channel.send(f'{message.author.mention}, Πρόσεχε μουνόπανο!')
+            await message.channel.send(f'{message.author.mention}, Πρόσεχε πως εκφράζεσαι!')
         except Exception as e:
             print(f"Δεν μπόρεσα να διαγράψω το μήνυμα: {e}")
         return 
