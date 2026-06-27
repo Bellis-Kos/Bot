@@ -102,7 +102,7 @@ async def pingeveryone(ctx, *, message: str):
 @pingeveryone.error
 async def pingeveryone_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send('❌ Δεν έχεις το δικαίωμα (Mention Everyone) στον server για να το κάνεις αυτό!')
+        await ctx.send('❌ You are noob get access and tag later ')
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send('❌ Πρέπει να γράψεις ένα μήνυμα!')
 
