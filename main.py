@@ -101,7 +101,19 @@ async def ping(ctx):
 async def hello(ctx):
     await ctx.send(f'Hello, {ctx.author.name}!')
 
+@bot.command(aliases=['ev', 'announce'])
+# Ελέγχει αν ο χρήστης έχει την άδεια να κάνει mention το everyone στον server του
+@commands.has_permissions(mention_everyone=True) 
+async def pingeveryone(ctx, *, message: str):
+    await ctx.message.delete()
+    await ctx.send(f'@everyone {message}')
 
+@pingeveryone.error
+async def pingeveryone_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send('❌ Δεν έχεις το δικαίωμα (Mention Everyone) στον server για να το κάνεις αυτό!')
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send('❌ Πρέπει να γράψεις ένα μήνυμα!')
 @bot.command(aliases=['purge', 'clean'])
 @commands.has_permissions(manage_messages=True)
 async def clear(ctx, amount: int):
