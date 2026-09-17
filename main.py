@@ -85,6 +85,33 @@ async def on_message(message):
     # Εδώ στέλνεται το κανονικό message για να δουλέψουν οι εντολές σωστά!
     await bot.process_commands(message)
 
+
+# Μεταβλητή για να κρατάει το ID του ρόλου (στη μνήμη)
+AUTOROLE_ID = None
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setautorole(ctx, role: discord.Role):
+    global AUTOROLE_ID
+    AUTOROLE_ID = role.id
+    await ctx.send(f'✅ Ο αυτόματος ρόλος ορίστηκε σε: **{role.name}**!')
+
+@bot.event 
+async def on_member_join(member):
+    try:
+        await member.send(f'Welcome to the server, {member.name}!')
+    except Exception:
+        pass
+
+    # Αν έχει οριστεί ρόλος από την εντολή, τον δίνει αυτόματα
+    if AUTOROLE_ID:
+        role = member.guild.get_role(AUTOROLE_ID)
+        if role:
+            try:
+                await member.add_roles(role)
+            except discord.Forbidden:
+                print("Σφάλμα: Ο ρόλος του Bot πρέπει να είναι πιο ψηλά στη λίστα των Roles!")
+
 @bot.command()
 async def ping(ctx):
     latency = round(bot.latency * 1000) 
