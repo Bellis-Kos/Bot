@@ -189,26 +189,55 @@ async def on_member_update(before, after):
 
 # Message Logs
 @bot.event
-async def on_message_edit(before, after):
-    if before.author.bot or before.content == after.content:
-        return
-    embed = discord.Embed(title="✏️ Επεξεργασία Μηνύματος", color=discord.Color.gold())
-    embed.set_author(name=str(before.author), icon_url=before.author.display_avatar.url)
-    embed.add_field(name="Κανάλι", value=before.channel.mention, inline=False)
-    embed.add_field(name="Πριν", value=before.content or "*Κενό*", inline=False)
-    embed.add_field(name="Μετά", value=after.content or "*Κενό*", inline=False)
-    await send_log_embed(before.guild, "message_logs", embed)
-
-@bot.event
 async def on_message_delete(message):
-    if message.author.bot:
+    # Αγνοούμε μηνύματα από bots ή μηνύματα εκτός server (DMs)
+    if message.author.bot or message.guild is None:
         return
-    embed = discord.Embed(title="🗑️ Διαγραφή Μηνύματος", color=discord.Color.dark_red())
-    embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
-    embed.add_field(name="Κανάλι", value=message.channel.mention, inline=False)
-    embed.add_field(name="Περιεχόμενο", value=message.content or "*Κενό*", inline=False)
+
+    embed = discord.Embed(
+        title="🗑️ Διαγραφή Μηνύματος",
+        description=f"Μήνυμα από {message.author.mention} διαγράφηκε στο κανάλι {message.channel.mention}.",
+        color=discord.Color.dark_red(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=f"{message.author} ({message.author.id})", icon_url=message.author.display_avatar.url)
+    
+    # Εμφάνιση του κειμένου που διαγράφηκε
+    content = message.content if message.content else "*Δεν υπήρχε κείμενο (π.χ. μόνο εικόνα/αρχείο)*"
+    embed.add_field(name="Περιεχόμενο που διαγράφηκε:", value=content, inline=False)
+
+    # Αν το μήνυμα είχε επισυναπτόμενα αρχεία/φωτογραφίες
+    if message.attachments:
+        files = "\n".join([f"[{att.filename}]({att.proxy_url})" for att in message.attachments])
+        embed.add_field(name="Συνημμένα Αρχεία:", value=files, inline=False)
+
+    embed.set_footer(text=f"Message ID: {message.id} | Channel ID: {message.channel.id}")
     await send_log_embed(message.guild, "message_logs", embed)
 
+
+@bot.event
+async def on_message_edit(before, after):
+    # Αγνοούμε bots, DMs, ή edits που γίνονται αυτόματα από links (embed updates)
+    if before.author.bot or before.guild is None or before.content == after.content:
+        return
+
+    embed = discord.Embed(
+        title="✏️ Επεξεργασία Μηνύματος",
+        description=f"Ο/Η {before.author.mention} επεξεργάστηκε ένα μήνυμα στο {before.channel.mention}. [Μετάβαση στο μήνυμα]({after.jump_url})",
+        color=discord.Color.gold(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=f"{before.author} ({before.author.id})", icon_url=before.author.display_avatar.url)
+    
+    # Πριν & Μετά
+    old_content = before.content if before.content else "*Κενό*"
+    new_content = after.content if after.content else "*Κενό*"
+    
+    embed.add_field(name="Αρχικό Μήνυμα (Πριν):", value=old_content, inline=False)
+    embed.add_field(name="Νέο Μήνυμα (Μετά):", value=new_content, inline=False)
+
+    embed.set_footer(text=f"Message ID: {after.id} | Channel ID: {after.channel.id}")
+    await send_log_embed(before.guild, "message_logs", embed)
 # Ban/Unban Logs
 @bot.event
 async def on_member_ban(guild, user):
