@@ -188,7 +188,7 @@ async def on_member_ban(guild, user):
 
 @bot.event
 async def on_member_unban(guild, user):
-    embed = discord.Embed(title="🔓 Unban Μέλους", description=f"Ο/Η {user.mention} ({user.name}) έγινε Unban.", color=discord.Color.teal())
+    embed = discord.Embed(title="Unban Μέλους", description=f"Ο/Η {user.mention} ({user.name}) έγινε Unban.", color=discord.Color.teal())
     embed.set_thumbnail(url=user.display_avatar.url)
     await send_log_embed(guild, "ban_logs", embed)
 
@@ -199,11 +199,11 @@ async def on_voice_state_update(member, before, after):
         return
     embed = None
     if before.channel is None and after.channel is not None:
-        embed = discord.Embed(title="🔊 Είσοδος σε Voice", description=f"Ο/Η {member.mention} μπήκε στο `{after.channel.name}`", color=discord.Color.green())
+        embed = discord.Embed(title="🔊 Join Voice", description=f"Ο/Η {member.mention} μπήκε στο `{after.channel.name}`", color=discord.Color.green())
     elif before.channel is not None and after.channel is None:
-        embed = discord.Embed(title="🔇 Έξοδος από Voice", description=f"Ο/Η {member.mention} βγήκε από το `{before.channel.name}`", color=discord.Color.red())
+        embed = discord.Embed(title="🔇Left Voice", description=f"Ο/Η {member.mention} βγήκε από το `{before.channel.name}`", color=discord.Color.red())
     elif before.channel != after.channel:
-        embed = discord.Embed(title="🔄 Μετακίνηση Voice", description=f"Ο/Η {member.mention} μετακινήθηκε: `{before.channel.name}` ➔ `{after.channel.name}`", color=discord.Color.light_grey())
+        embed = discord.Embed(title="🔄 Move Voice", description=f"Ο/Η {member.mention} μετακινήθηκε: `{before.channel.name}` ➔ `{after.channel.name}`", color=discord.Color.light_grey())
 
     if embed:
         embed.set_thumbnail(url=member.display_avatar.url)
