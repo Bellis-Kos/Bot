@@ -36,9 +36,21 @@ bot = commands.Bot(command_prefix='[]', intents=intents, case_insensitive=True)
 async def on_ready():
     print(f"We are logged in as {bot.user.name}")
 
-@bot.event 
+ @bot.event 
 async def on_member_join(member):
-    await member.send(f'Welcome to the server, {member.name}!')
+    # 1. Προσπάθεια για αποστολή σε DM
+    try:
+        await member.send(f'Καλωσόρισες στον server, {member.name}!')
+    except Exception:
+        pass  # Αν έχει κλειστά τα DMs, το αγνοεί για να μην κρασάρει
+
+    # 2. Αποστολή σε συγκεκριμένο κανάλι του server
+    # Αντικατάστησε το ID με το ID του καναλιού όπου θες να μπαίνει το μήνυμα
+    welcome_channel = member.guild.get_channel(123456789012345678) 
+    
+    if welcome_channel:
+        await welcome_channel.send(f'Καλώς ήρθες στον server {member.mention}! 🎉')
+
 
 BANNED_WORDS = {
     'μουνοπανο', 'μουνοπανα', 'μουνοπανος',
