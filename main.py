@@ -11,13 +11,13 @@ import discord
 from discord.ext import commands
 
 # -----------------------------------------
-# Web Server (Keep-Alive)
+# Web Server (Keep-Alive για Render)
 # -----------------------------------------
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is online with MongoDB!"
+    return "Bot is online with low latency & MongoDB!"
 
 def run():
     port = int(os.environ.get("PORT", 8080))
@@ -50,30 +50,59 @@ intents.moderation = True
 bot = commands.Bot(command_prefix='[]', intents=intents, case_insensitive=True)
 
 # -----------------------------------------
-# MongoDB Storage Helpers
+# RAM Cache & Async Helpers (Μείωση Ping)
 # -----------------------------------------
-def get_guild_setting(guild_id, key):
-    doc = configs_col.find_one({"_id": str(guild_id)})
-    if doc:
-        return doc.get(key)
-    return None
+GUILD_CACHE = {}
 
-def update_guild_setting(guild_id, key, value):
-    configs_col.update_one(
-        {"_id": str(guild_id)},
+def load_all_configs():
+    global GUILD_CACHE
+    try:
+        for doc in configs_col.find({}):
+            GUILD_CACHE[doc["_id"]] = doc
+        print("✅ Το Cache ρυθμίσεων φορτώθηκε επιτυχώς στη RAM!")
+    except Exception as e:
+        print(f"Σφάλμα φόρτωσης cache: {e}")
+
+def get_guild_setting(guild_id, key):
+    # Ανάκτηση ακαριαία από τη μνήμη RAM (0ms latency)
+    guild_data = GUILD_CACHE.get(str(guild_id), {})
+    return guild_data.get(key)
+
+async def async_update_setting(guild_id, key, value):
+    guild_id_str = str(guild_id)
+    if guild_id_str not in GUILD_CACHE:
+        GUILD_CACHE[guild_id_str] = {}
+    GUILD_CACHE[guild_id_str][key] = value
+
+    # Μη-μπλοκαριστική αποθήκευση στο background
+    await asyncio.to_thread(
+        configs_col.update_one,
+        {"_id": guild_id_str},
         {"$set": {key: value}},
         upsert=True
     )
 
-def increment_abuse_counter(guild_id, user_id):
-    field_name = f"abuse_counts.{str(user_id)}"
-    result = configs_col.find_one_and_update(
-        {"_id": str(guild_id)},
+async def async_increment_abuse(guild_id, user_id):
+    guild_id_str = str(guild_id)
+    user_id_str = str(user_id)
+    
+    if guild_id_str not in GUILD_CACHE:
+        GUILD_CACHE[guild_id_str] = {}
+    if "abuse_counts" not in GUILD_CACHE[guild_id_str]:
+        GUILD_CACHE[guild_id_str]["abuse_counts"] = {}
+        
+    current = GUILD_CACHE[guild_id_str]["abuse_counts"].get(user_id_str, 0) + 1
+    GUILD_CACHE[guild_id_str]["abuse_counts"][user_id_str] = current
+
+    # Ενημέρωση MongoDB στο background
+    field_name = f"abuse_counts.{user_id_str}"
+    await asyncio.to_thread(
+        configs_col.update_one,
+        {"_id": guild_id_str},
         {"$inc": {field_name: 1}},
-        upsert=True,
-        return_document=True
+        upsert=True
     )
-    return result.get("abuse_counts", {}).get(str(user_id), 1)
+    return current
 
 async def send_log_embed(guild, log_key, embed):
     channel_id = get_guild_setting(guild.id, log_key)
@@ -104,6 +133,7 @@ BANNED_WORDS = {
 # -----------------------------------------
 @bot.event
 async def on_ready():
+    load_all_configs()
     print(f"Logged in as {bot.user.name} and connected to MongoDB!")
 
 # Server Logs & Auto-Role
@@ -126,7 +156,7 @@ async def on_member_join(member):
         if ch:
             await ch.send(f'👋 Καλώς όρισες στον server {member.mention}!')
 
-    # Server Logs Embed
+    # Server Logs
     embed = discord.Embed(title="📥 Μέλος Μπήκε", description=f"{member.mention} ({member.name})", color=discord.Color.green())
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"ID: {member.id}")
@@ -141,13 +171,13 @@ async def on_member_remove(member):
         if ch:
             await ch.send(f'👋 Ο/Η **{member.name}** αποχώρησε.')
 
-    # Server Logs Embed
+    # Server Logs
     embed = discord.Embed(title="📤 Μέλος Αποχώρησε", description=f"{member.mention} ({member.name})", color=discord.Color.red())
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"ID: {member.id}")
     await send_log_embed(member.guild, "server_logs", embed)
 
-# Roles Logs & Timeout Tracker (Abuse Logs)
+# Roles Logs & Timeouts (Abuse Logs)
 @bot.event
 async def on_member_update(before, after):
     now = datetime.now(timezone.utc)
@@ -169,7 +199,7 @@ async def on_member_update(before, after):
         embed.add_field(name="Χρήστης", value=f"{after.mention} (`{after.id}`)", inline=False)
         await send_log_embed(after.guild, "abuse_logs", embed)
 
-    # Role Updates
+    # Role Changes
     if before.roles != after.roles:
         added_roles = [r.mention for r in after.roles if r not in before.roles]
         removed_roles = [r.mention for r in before.roles if r not in after.roles]
@@ -222,7 +252,7 @@ async def on_message_delete(message):
     embed.set_footer(text=f"Message ID: {message.id} | Channel ID: {message.channel.id}")
     await send_log_embed(message.guild, "message_logs", embed)
 
-# Ban/Unban Logs
+# Ban / Unban Logs
 @bot.event
 async def on_member_ban(guild, user):
     embed = discord.Embed(title="🔨 Ban Μέλους", description=f"Ο/Η {user.mention} ({user.name}) δέχτηκε Ban.", color=discord.Color.dark_purple())
@@ -252,7 +282,7 @@ async def on_voice_state_update(member, before, after):
         embed.set_thumbnail(url=member.display_avatar.url)
         await send_log_embed(member.guild, "voice_logs", embed)
 
-# Abuse Filter, Counter & Commands Dispatch
+# Abuse Filter, Counter & Dispatch
 @bot.event
 async def on_message(message):
     if message.author == bot.user or message.guild is None:
@@ -264,8 +294,8 @@ async def on_message(message):
             await message.delete()
             await message.channel.send(f'{message.author.mention}, Πρόσεχε τις εκφράσεις σου!')
             
-            # Αύξηση και καταγραφή στον μετρητή της MongoDB
-            abuse_total = increment_abuse_counter(message.guild.id, message.author.id)
+            # Counter με άμεσο update σε RAM και async στη βάση
+            abuse_total = await async_increment_abuse(message.guild.id, message.author.id)
 
             embed = discord.Embed(title="🚨 Εντοπισμός Υβριστικού Μηνύματος", color=discord.Color.red())
             embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
@@ -310,13 +340,13 @@ async def pingeveryone(ctx, *, message: str):
     await ctx.send(f'@everyone {message}')
 
 # -----------------------------------------
-# Commands: Setups (MongoDB Backed)
+# Commands: Setups (Async MongoDB + RAM Cache)
 # -----------------------------------------
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setwelcome(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "welcome_channel", target.id)
+    await async_update_setting(ctx.guild.id, "welcome_channel", target.id)
     embed = discord.Embed(title="🎉 Ρύθμιση Welcome", description=f"Κανάλι: {target.mention}", color=discord.Color.green())
     await ctx.send(embed=embed)
 
@@ -324,14 +354,14 @@ async def setwelcome(ctx, channel: discord.TextChannel = None):
 @commands.has_permissions(administrator=True)
 async def setleave(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "leave_channel", target.id)
+    await async_update_setting(ctx.guild.id, "leave_channel", target.id)
     embed = discord.Embed(title="👋 Ρύθμιση Leave", description=f"Κανάλι: {target.mention}", color=discord.Color.orange())
     await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setautorole(ctx, role: discord.Role):
-    update_guild_setting(ctx.guild.id, "autorole", role.id)
+    await async_update_setting(ctx.guild.id, "autorole", role.id)
     embed = discord.Embed(title="🛡️ Ρύθμιση Auto-Role", description=f"Ρόλος: {role.mention}", color=discord.Color.purple())
     await ctx.send(embed=embed)
 
@@ -339,45 +369,45 @@ async def setautorole(ctx, role: discord.Role):
 @commands.has_permissions(administrator=True)
 async def setserverlogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "server_logs", target.id)
+    await async_update_setting(ctx.guild.id, "server_logs", target.id)
     await ctx.send(f'🤖 Server-Logs ορίστηκε στο: {target.mention}')
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setroleslogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "roles_logs", target.id)
+    await async_update_setting(ctx.guild.id, "roles_logs", target.id)
     await ctx.send(f'🤖 Roles-Logs ορίστηκε στο: {target.mention}')
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setmessagelogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "message_logs", target.id)
+    await async_update_setting(ctx.guild.id, "message_logs", target.id)
     await ctx.send(f'🤖 Message-Logs ορίστηκε στο: {target.mention}')
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setbanlogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "ban_logs", target.id)
+    await async_update_setting(ctx.guild.id, "ban_logs", target.id)
     await ctx.send(f'🤖 Ban-Unban-Logs ορίστηκε στο: {target.mention}')
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setvoicelogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "voice_logs", target.id)
+    await async_update_setting(ctx.guild.id, "voice_logs", target.id)
     await ctx.send(f'🤖 Voice-Logs ορίστηκε στο: {target.mention}')
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setabuselogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
-    update_guild_setting(ctx.guild.id, "abuse_logs", target.id)
+    await async_update_setting(ctx.guild.id, "abuse_logs", target.id)
     await ctx.send(f'🤖 Abuse-Logs ορίστηκε στο: {target.mention}')
 
-# Error Handler
+# Global Error Handler για Admins
 @setwelcome.error
 @setleave.error
 @setautorole.error
