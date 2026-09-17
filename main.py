@@ -285,33 +285,45 @@ async def on_voice_state_update(member, before, after):
 # Abuse Filter, Counter & Dispatch
 @bot.event
 async def on_message(message):
-    if message.author == bot.user or message.guild is None:
+    if message.author.bot or message.guild is None:
         return
 
     clean_msg = clean_text(message.content)
-    if any(word in clean_msg for word in BANNED_WORDS):
+
+    # Ελέγχουμε αν υπάρχει κάποια απαγορευμένη λέξη μέσα στο κείμενο
+    found_word = next((word for word in BANNED_WORDS if word in clean_msg), None)
+
+    if found_word:
+        print(f"⚠️ Εντοπίστηκε λέξη: '{found_word}' από {message.author.name}")
+        
         try:
-            await message.delete()
-            await message.channel.send(f'{message.author.mention}, Πρόσεχε τις εκφράσεις σου!')
-            
-            # Counter με άμεσο update σε RAM και async στη βάση
+            # 1. Αύξηση μετρητή στη RAM & αποθήκευση στη MongoDB
             abuse_total = await async_increment_abuse(message.guild.id, message.author.id)
 
-            embed = discord.Embed(title="🚨 Εντοπισμός Υβριστικού Μηνύματος", color=discord.Color.red())
-            embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
-            embed.add_field(name="Χρήστης", value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
+            # 2. Προειδοποίηση στο κανάλι όπου γράφτηκε η λέξη
+            await message.channel.send(f'⚠️ {message.author.mention}, πρόσεχε τις εκφράσεις σου! (Παράβαση #{abuse_total})')
+
+            # 3. Αποστολή αναλυτικού Embed στο κανάλι Abuse Logs
+            embed = discord.Embed(
+                title="🚨 Εντοπισμός Υβριστικού Μηνύματος", 
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_author(name=f"{message.author} ({message.author.id})", icon_url=message.author.display_avatar.url)
+            embed.add_field(name="Χρήστης", value=message.author.mention, inline=True)
             embed.add_field(name="Κανάλι", value=message.channel.mention, inline=True)
             embed.add_field(name="Σύνολο Παραβάσεων", value=f"⚠️ **{abuse_total}η φορά**", inline=False)
-            embed.add_field(name="Μήνυμα", value=f"||{message.content}||", inline=False)
-            embed.set_footer(text=f"Καταγραφή Abuse-Logs | Χρήστης: {message.author.name}")
+            embed.add_field(name="Λέξη που εντοπίστηκε", value=f"`{found_word}`", inline=False)
+            embed.add_field(name="Πλήρες Μήνυμα", value=f"||{message.content}||", inline=False)
+            embed.set_footer(text=f"User ID: {message.author.id}")
             
             await send_log_embed(message.guild, "abuse_logs", embed)
+
         except Exception as e:
-            print(f"Σφάλμα διαγραφής: {e}")
-        return
+            print(f"❌ Σφάλμα κατά την καταγραφή abuse: {e}")
 
+    # Απαραίτητο για να συνεχίσουν να εκτελούνται όλες οι υπόλοιπες εντολές ([]ping, []setroleslogs κλπ.)
     await bot.process_commands(message)
-
 # -----------------------------------------
 # Commands: General & Moderation
 # -----------------------------------------
