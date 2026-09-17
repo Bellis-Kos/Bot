@@ -1,11 +1,11 @@
 import os
-import json
 import asyncio
 import logging
 from datetime import datetime, timezone
 from threading import Thread
 from dotenv import load_dotenv
 from flask import Flask
+from pymongo import MongoClient
 
 import discord
 from discord.ext import commands
@@ -17,7 +17,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is active!"
+    return "Bot is online with MongoDB!"
 
 def run():
     port = int(os.environ.get("PORT", 8080))
@@ -28,10 +28,17 @@ def keep_alive():
     t.start()
 
 # -----------------------------------------
-# Setup & Intents
+# Setup & Database Connection
 # -----------------------------------------
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
+mongo_uri = os.getenv('MONGO_URI')
+
+# Σύνδεση με MongoDB Atlas
+mongo_client = MongoClient(mongo_uri)
+db = mongo_client["discord_bot_db"]
+configs_col = db["server_configs"]
+
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
 
 intents = discord.Intents.default()
@@ -41,50 +48,32 @@ intents.voice_states = True
 intents.moderation = True
 
 bot = commands.Bot(command_prefix='[]', intents=intents, case_insensitive=True)
-CONFIG_FILE = "server_configs.json"
 
 # -----------------------------------------
-# JSON Storage Helpers
+# MongoDB Storage Helpers
 # -----------------------------------------
-def load_configs():
-    if not os.path.exists(CONFIG_FILE):
-        return {}
-    try:
-        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def save_configs(data):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
-
 def get_guild_setting(guild_id, key):
-    configs = load_configs()
-    return configs.get(str(guild_id), {}).get(key)
+    doc = configs_col.find_one({"_id": str(guild_id)})
+    if doc:
+        return doc.get(key)
+    return None
 
 def update_guild_setting(guild_id, key, value):
-    configs = load_configs()
-    guild_id_str = str(guild_id)
-    if guild_id_str not in configs:
-        configs[guild_id_str] = {}
-    configs[guild_id_str][key] = value
-    save_configs(configs)
+    configs_col.update_one(
+        {"_id": str(guild_id)},
+        {"$set": {key: value}},
+        upsert=True
+    )
 
 def increment_abuse_counter(guild_id, user_id):
-    configs = load_configs()
-    guild_id_str = str(guild_id)
-    user_id_str = str(user_id)
-    
-    if guild_id_str not in configs:
-        configs[guild_id_str] = {}
-    if "abuse_counts" not in configs[guild_id_str]:
-        configs[guild_id_str]["abuse_counts"] = {}
-        
-    current = configs[guild_id_str]["abuse_counts"].get(user_id_str, 0) + 1
-    configs[guild_id_str]["abuse_counts"][user_id_str] = current
-    save_configs(configs)
-    return current
+    field_name = f"abuse_counts.{str(user_id)}"
+    result = configs_col.find_one_and_update(
+        {"_id": str(guild_id)},
+        {"$inc": {field_name: 1}},
+        upsert=True,
+        return_document=True
+    )
+    return result.get("abuse_counts", {}).get(str(user_id), 1)
 
 async def send_log_embed(guild, log_key, embed):
     channel_id = get_guild_setting(guild.id, log_key)
@@ -115,11 +104,12 @@ BANNED_WORDS = {
 # -----------------------------------------
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user.name}")
+    print(f"Logged in as {bot.user.name} and connected to MongoDB!")
 
 # Server Logs & Auto-Role
 @bot.event
 async def on_member_join(member):
+    # Auto-Role
     role_id = get_guild_setting(member.guild.id, "autorole")
     if role_id:
         role = member.guild.get_role(role_id)
@@ -129,12 +119,14 @@ async def on_member_join(member):
             except discord.Forbidden:
                 pass
 
+    # Public Welcome Message
     welcome_id = get_guild_setting(member.guild.id, "welcome_channel")
     if welcome_id:
         ch = member.guild.get_channel(welcome_id)
         if ch:
             await ch.send(f'👋 Καλώς όρισες στον server {member.mention}!')
 
+    # Server Logs Embed
     embed = discord.Embed(title="📥 Μέλος Μπήκε", description=f"{member.mention} ({member.name})", color=discord.Color.green())
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"ID: {member.id}")
@@ -142,12 +134,14 @@ async def on_member_join(member):
 
 @bot.event
 async def on_member_remove(member):
+    # Public Leave Message
     leave_id = get_guild_setting(member.guild.id, "leave_channel")
     if leave_id:
         ch = member.guild.get_channel(leave_id)
         if ch:
             await ch.send(f'👋 Ο/Η **{member.name}** αποχώρησε.')
 
+    # Server Logs Embed
     embed = discord.Embed(title="📤 Μέλος Αποχώρησε", description=f"{member.mention} ({member.name})", color=discord.Color.red())
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"ID: {member.id}")
@@ -156,11 +150,11 @@ async def on_member_remove(member):
 # Roles Logs & Timeout Tracker (Abuse Logs)
 @bot.event
 async def on_member_update(before, after):
-    # 1. Έλεγχος για Timeout (Προσθήκη / Αφαίρεση)
     now = datetime.now(timezone.utc)
     was_timed_out = before.timed_out_until is not None and before.timed_out_until > now
     is_timed_out = after.timed_out_until is not None and after.timed_out_until > now
 
+    # Timeout Added
     if not was_timed_out and is_timed_out:
         embed = discord.Embed(title="⏳ Timeout Επιβλήθηκε", color=discord.Color.red())
         embed.set_thumbnail(url=after.display_avatar.url)
@@ -168,13 +162,14 @@ async def on_member_update(before, after):
         embed.add_field(name="Διάρκεια έως", value=f"<t:{int(after.timed_out_until.timestamp())}:F> (<t:{int(after.timed_out_until.timestamp())}:R>)", inline=False)
         await send_log_embed(after.guild, "abuse_logs", embed)
 
+    # Timeout Removed
     elif was_timed_out and not is_timed_out:
         embed = discord.Embed(title="🔓 Timeout Έληξε / Αφαιρέθηκε", color=discord.Color.green())
         embed.set_thumbnail(url=after.display_avatar.url)
         embed.add_field(name="Χρήστης", value=f"{after.mention} (`{after.id}`)", inline=False)
         await send_log_embed(after.guild, "abuse_logs", embed)
 
-    # 2. Roles Logs
+    # Role Updates
     if before.roles != after.roles:
         added_roles = [r.mention for r in after.roles if r not in before.roles]
         removed_roles = [r.mention for r in before.roles if r not in after.roles]
@@ -187,37 +182,9 @@ async def on_member_update(before, after):
         embed.set_thumbnail(url=after.display_avatar.url)
         await send_log_embed(after.guild, "roles_logs", embed)
 
-# Message Logs
-@bot.event
-async def on_message_delete(message):
-    # Αγνοούμε μηνύματα από bots ή μηνύματα εκτός server (DMs)
-    if message.author.bot or message.guild is None:
-        return
-
-    embed = discord.Embed(
-        title="🗑️ Διαγραφή Μηνύματος",
-        description=f"Μήνυμα από {message.author.mention} διαγράφηκε στο κανάλι {message.channel.mention}.",
-        color=discord.Color.dark_red(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.set_author(name=f"{message.author} ({message.author.id})", icon_url=message.author.display_avatar.url)
-    
-    # Εμφάνιση του κειμένου που διαγράφηκε
-    content = message.content if message.content else "*Δεν υπήρχε κείμενο (π.χ. μόνο εικόνα/αρχείο)*"
-    embed.add_field(name="Περιεχόμενο που διαγράφηκε:", value=content, inline=False)
-
-    # Αν το μήνυμα είχε επισυναπτόμενα αρχεία/φωτογραφίες
-    if message.attachments:
-        files = "\n".join([f"[{att.filename}]({att.proxy_url})" for att in message.attachments])
-        embed.add_field(name="Συνημμένα Αρχεία:", value=files, inline=False)
-
-    embed.set_footer(text=f"Message ID: {message.id} | Channel ID: {message.channel.id}")
-    await send_log_embed(message.guild, "message_logs", embed)
-
-
+# Message Logs (Edit & Delete)
 @bot.event
 async def on_message_edit(before, after):
-    # Αγνοούμε bots, DMs, ή edits που γίνονται αυτόματα από links (embed updates)
     if before.author.bot or before.guild is None or before.content == after.content:
         return
 
@@ -228,16 +195,33 @@ async def on_message_edit(before, after):
         timestamp=discord.utils.utcnow()
     )
     embed.set_author(name=f"{before.author} ({before.author.id})", icon_url=before.author.display_avatar.url)
-    
-    # Πριν & Μετά
-    old_content = before.content if before.content else "*Κενό*"
-    new_content = after.content if after.content else "*Κενό*"
-    
-    embed.add_field(name="Αρχικό Μήνυμα (Πριν):", value=old_content, inline=False)
-    embed.add_field(name="Νέο Μήνυμα (Μετά):", value=new_content, inline=False)
-
+    embed.add_field(name="Αρχικό Μήνυμα (Πριν):", value=before.content or "*Κενό*", inline=False)
+    embed.add_field(name="Νέο Μήνυμα (Μετά):", value=after.content or "*Κενό*", inline=False)
     embed.set_footer(text=f"Message ID: {after.id} | Channel ID: {after.channel.id}")
     await send_log_embed(before.guild, "message_logs", embed)
+
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot or message.guild is None:
+        return
+
+    embed = discord.Embed(
+        title="🗑️ Διαγραφή Μηνύματος",
+        description=f"Μήνυμα από {message.author.mention} διαγράφηκε στο κανάλι {message.channel.mention}.",
+        color=discord.Color.dark_red(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_author(name=f"{message.author} ({message.author.id})", icon_url=message.author.display_avatar.url)
+    content = message.content if message.content else "*Δεν υπήρχε κείμενο (π.χ. μόνο αρχείο/εικόνα)*"
+    embed.add_field(name="Περιεχόμενο που διαγράφηκε:", value=content, inline=False)
+
+    if message.attachments:
+        files = "\n".join([f"[{att.filename}]({att.proxy_url})" for att in message.attachments])
+        embed.add_field(name="Συνημμένα Αρχεία:", value=files, inline=False)
+
+    embed.set_footer(text=f"Message ID: {message.id} | Channel ID: {message.channel.id}")
+    await send_log_embed(message.guild, "message_logs", embed)
+
 # Ban/Unban Logs
 @bot.event
 async def on_member_ban(guild, user):
@@ -268,7 +252,7 @@ async def on_voice_state_update(member, before, after):
         embed.set_thumbnail(url=member.display_avatar.url)
         await send_log_embed(member.guild, "voice_logs", embed)
 
-# Abuse Logs με Μετρητή Παραβάσεων & Φίλτρο Μηνυμάτων
+# Abuse Filter, Counter & Commands Dispatch
 @bot.event
 async def on_message(message):
     if message.author == bot.user or message.guild is None:
@@ -280,10 +264,9 @@ async def on_message(message):
             await message.delete()
             await message.channel.send(f'{message.author.mention}, Πρόσεχε τις εκφράσεις σου!')
             
-            # Αύξηση και ανάκτηση του μετρητή παραβάσεων
+            # Αύξηση και καταγραφή στον μετρητή της MongoDB
             abuse_total = increment_abuse_counter(message.guild.id, message.author.id)
 
-            # Αποστολή στο Abuse Logs
             embed = discord.Embed(title="🚨 Εντοπισμός Υβριστικού Μηνύματος", color=discord.Color.red())
             embed.set_author(name=str(message.author), icon_url=message.author.display_avatar.url)
             embed.add_field(name="Χρήστης", value=f"{message.author.mention} (`{message.author.id}`)", inline=True)
@@ -300,7 +283,7 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # -----------------------------------------
-# Commands
+# Commands: General & Moderation
 # -----------------------------------------
 @bot.command()
 async def ping(ctx):
@@ -327,27 +310,30 @@ async def pingeveryone(ctx, *, message: str):
     await ctx.send(f'@everyone {message}')
 
 # -----------------------------------------
-# Setup Commands
+# Commands: Setups (MongoDB Backed)
 # -----------------------------------------
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setwelcome(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
     update_guild_setting(ctx.guild.id, "welcome_channel", target.id)
-    await ctx.send(f'✅ Κανάλι Welcome: {target.mention}')
+    embed = discord.Embed(title="🎉 Ρύθμιση Welcome", description=f"Κανάλι: {target.mention}", color=discord.Color.green())
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setleave(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
     update_guild_setting(ctx.guild.id, "leave_channel", target.id)
-    await ctx.send(f'✅ Κανάλι Leave: {target.mention}')
+    embed = discord.Embed(title="👋 Ρύθμιση Leave", description=f"Κανάλι: {target.mention}", color=discord.Color.orange())
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setautorole(ctx, role: discord.Role):
     update_guild_setting(ctx.guild.id, "autorole", role.id)
-    await ctx.send(f'✅ Auto-Role: **{role.name}**')
+    embed = discord.Embed(title="🛡️ Ρύθμιση Auto-Role", description=f"Ρόλος: {role.mention}", color=discord.Color.purple())
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -390,6 +376,20 @@ async def setabuselogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
     update_guild_setting(ctx.guild.id, "abuse_logs", target.id)
     await ctx.send(f'🤖 Abuse-Logs ορίστηκε στο: {target.mention}')
+
+# Error Handler
+@setwelcome.error
+@setleave.error
+@setautorole.error
+@setserverlogs.error
+@setroleslogs.error
+@setmessagelogs.error
+@setbanlogs.error
+@setvoicelogs.error
+@setabuselogs.error
+async def admin_perms_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send('❌ Πρέπει να είσαι Administrator για να εκτελέσεις αυτή την εντολή!')
 
 # -----------------------------------------
 # Run
