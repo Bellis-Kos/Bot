@@ -222,43 +222,88 @@ async def pingeveryone_error(ctx, error):
         await ctx.send('❌ Πρέπει να γράψεις ένα μήνυμα! (π.χ. `[]pingeveryone Ανακοίνωση`)')
 
 # -----------------------------------------
-# Εντολές Ρυθμίσεων Server (Admin Only)
+# Εντολές Ρυθμίσεων Server (Με Πλούσιο Feedback)
 # -----------------------------------------
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setwelcome(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
     update_guild_setting(ctx.guild.id, "welcome_channel", target.id)
-    await ctx.send(f'✅ Κανάλι Welcome: {target.mention}')
+    
+    embed = discord.Embed(
+        title="🎉 Ρύθμιση Welcome Ολοκληρώθηκε!",
+        description=f"Τα μηνύματα καλωσορίσματος νέων μελών θα στέλνονται πλέον στο {target.mention}.",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Κανάλι", value=f"`#{target.name}` (ID: `{target.id}`)", inline=False)
+    embed.set_footer(text=f"Ρυθμίστηκε από {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setleave(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
     update_guild_setting(ctx.guild.id, "leave_channel", target.id)
-    await ctx.send(f'✅ Κανάλι Leave: {target.mention}')
+    
+    embed = discord.Embed(
+        title="👋 Ρύθμιση Leave Ολοκληρώθηκε!",
+        description=f"Οι ειδοποιήσεις αποχώρησης μελών θα στέλνονται πλέον στο {target.mention}.",
+        color=discord.Color.orange()
+    )
+    embed.add_field(name="Κανάλι", value=f"`#{target.name}` (ID: `{target.id}`)", inline=False)
+    embed.set_footer(text=f"Ρυθμίστηκε από {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setlogs(ctx, channel: discord.TextChannel = None):
     target = channel or ctx.channel
     update_guild_setting(ctx.guild.id, "log_channel", target.id)
-    await ctx.send(f'✅ Κανάλι Logs: {target.mention}')
+    
+    embed = discord.Embed(
+        title="📜 Ρύθμιση Logs Ολοκληρώθηκε!",
+        description=f"Η καταγραφή ενεργειών (Voice states & Message edits) θα στέλνεται στο {target.mention}.",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="Κανάλι", value=f"`#{target.name}` (ID: `{target.id}`)", inline=False)
+    embed.set_footer(text=f"Ρυθμίστηκε από {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setautorole(ctx, role: discord.Role):
     update_guild_setting(ctx.guild.id, "autorole", role.id)
-    await ctx.send(f'✅ Auto-Role: **{role.name}**')
+    
+    embed = discord.Embed(
+        title="🛡️ Ρύθμιση Auto-Role Ολοκληρώθηκε!",
+        description=f"Κάθε νέο μέλος που μπαίνει στον server θα παίρνει αυτόματα τον ρόλο {role.mention}.",
+        color=discord.Color.purple()
+    )
+    embed.add_field(name="Όνομα Ρόλου", value=f"`{role.name}` (ID: `{role.id}`)", inline=False)
+    embed.set_footer(text=f"Ρυθμίστηκε από {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    await ctx.send(embed=embed)
 
-# Error handler για τις admin εντολές
+# Error handler με ξεκάθαρο μήνυμα αν λείπουν δικαιώματα ή ορίσματα
 @setwelcome.error
 @setleave.error
 @setlogs.error
 @setautorole.error
 async def admin_commands_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send('❌ Πρέπει να είσαι Administrator για να εκτελέσεις αυτή την εντολή!')
+        embed = discord.Embed(
+            title="⛔ Απαγορεύεται η Πρόσβαση",
+            description="Πρέπει να είσαι **Administrator** στον server για να εκτελέσεις αυτή την εντολή!",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, (commands.BadArgument, commands.MissingRequiredArgument)):
+        embed = discord.Embed(
+            title="⚠️ Λάθος Σύνταξη",
+            description="Βεβαιώσου ότι έχεις αναφέρει σωστά το κανάλι (π.χ. `#welcome`) ή τον ρόλο (π.χ. `@Member`).",
+            color=discord.Color.gold()
+        )
+        await ctx.send(embed=embed)
 
 # -----------------------------------------
 # Εκκίνηση
