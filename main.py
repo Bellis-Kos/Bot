@@ -309,75 +309,93 @@ async def pingeveryone(ctx, *, message: str):
     await ctx.message.delete()
     await ctx.send(f'@everyone {message}')
 
-# -----------------------------------------
-# Plant & Pick Up Tracker
-# -----------------------------------------
+@bot.event
+async def on_message(message):
+    if message.author.bot or message.guild is None:
+        return
 
-class PickUpButton(discord.ui.View):
-    def __init__(self, plant_id: str, planted_time: int, planter_id: int):
-        super().__init__(timeout=None)  # None για να μην λήγει το κουμπί
-        self.plant_id = plant_id
-        self.planted_time = planted_time
-        self.planter_id = planter_id
+    # ----------------------------------------------------
+    # 1. Σύστημα Plant / Harvest με Εικόνα
+    # ----------------------------------------------------
+    plant_channel_id = get_guild_setting(message.guild.id, "plant_channel")
+    
+    if plant_channel_id and message.channel.id == plant_channel_id:
+        # Ελέγχουμε αν υπάρχει εικόνα είτε από content_type είτε από filename extension
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.webp', '.gif')
+        is_image = False
+        plant_img = None
 
-    @discord.ui.button(label="🌾 Pick Up (Συγκομιδή)", style=discord.ButtonStyle.success, custom_id="pickup_btn")
-    async def pickup(self, interaction: discord.Interaction, button: discord.ui.Button):
-        now_ts = int(discord.utils.utcnow().timestamp())
-        diff_minutes = (now_ts - self.planted_time) // 60
+        if message.attachments:
+            att = message.attachments[0]
+            if (att.content_type and att.content_type.startswith('image/')) or att.filename.lower().endswith(valid_extensions):
+                is_image = True
+                plant_img = att
 
-        # Απενεργοποίηση του κουμπιού
-        button.disabled = True
-        button.label = "✅ Ολοκληρώθηκε"
-        button.style = discord.ButtonStyle.secondary
+        if is_image and plant_img:
+            print(f"🌱 [PLANT] Εντοπίστηκε εικόνα από {message.author.name} στο κανάλι φυτών!")
+            planted_ts = int(discord.utils.utcnow().timestamp())
 
-        # Ενημέρωση του αρχικού Embed
-        embed = interaction.message.embeds[0]
-        embed.title = "🌾 Κατάσταση: Μαζεύτηκε (Picked Up)"
-        embed.color = discord.Color.green()
+            embed = discord.Embed(
+                title="🌱 Κατάσταση: Φυτεύτηκε (Planted)",
+                description=f"Νέα καταγραφή από {message.author.mention}",
+                color=discord.Color.gold(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_author(name=f"{message.author.name}", icon_url=message.author.display_avatar.url)
+            embed.add_field(name="🕒 Ώρα Φύτευσης", value=f"<t:{planted_ts}:F> (<t:{planted_ts}:R>)", inline=False)
+            embed.set_image(url=plant_img.url)
+            embed.set_footer(text="Πάτησε το κουμπί μόλις γίνει η συγκομιδή.")
 
-        embed.add_field(
-            name="🧺 Συγκομιδή από",
-            value=f"{interaction.user.mention} (<t:{now_ts}:T>)",
-            inline=False
-        )
-        embed.add_field(
-            name="⏳ Χρόνος Ανάπτυξης",
-            value=f"**{diff_minutes}** λεπτά",
-            inline=True
-        )
+            view = PickUpButton(plant_id=str(message.id), planted_time=planted_ts, planter_id=message.author.id)
+            sent_msg = await message.channel.send(embed=embed, view=view)
 
-        # Αποθήκευση στη MongoDB στο background
-        await asyncio.to_thread(
-            db["plants_data"].update_one,
-            {"message_id": interaction.message.id},
-            {
-                "$set": {
-                    "status": "picked_up",
-                    "picked_by": interaction.user.id,
-                    "picked_time": now_ts,
-                    "duration_minutes": diff_minutes
+            # Αποθήκευση στη MongoDB στο background
+            await asyncio.to_thread(
+                db["plants_data"].insert_one,
+                {
+                    "message_id": sent_msg.id,
+                    "guild_id": message.guild.id,
+                    "planter_id": message.author.id,
+                    "planted_time": planted_ts,
+                    "image_url": plant_img.url,
+                    "status": "planted"
                 }
-            },
-            upsert=True
-        )
+            )
+            return  # Σταματάμε εδώ για να μην ψάχνει για banned words
 
-        await interaction.response.edit_message(embed=embed, view=self)
-        await interaction.followup.send(f"✅ {interaction.user.mention}, καταγράφηκε η συγκομιδή!", ephemeral=True)
+    # ----------------------------------------------------
+    # 2. Φίλτρο Banned Words & Abuse Logs
+    # ----------------------------------------------------
+    clean_msg = clean_text(message.content)
+    found_word = next((word for word in BANNED_WORDS if word in clean_msg), None)
 
+    if found_word:
+        print(f"⚠️ Εντοπίστηκε λέξη: '{found_word}' από {message.author.name}")
+        try:
+            abuse_total = await async_increment_abuse(message.guild.id, message.author.id)
+            await message.channel.send(f'⚠️ {message.author.mention}, πρόσεχε τις εκφράσεις σου! (Παράβαση #{abuse_total})')
 
-# Εντολή για να ορίσεις το κανάλι όπου θα λειτουργεί το plant system
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def setplantchannel(ctx, channel: discord.TextChannel = None):
-    target = channel or ctx.channel
-    await async_update_setting(ctx.guild.id, "plant_channel", target.id)
-    embed = discord.Embed(
-        title="🌱 Κανάλι Φυτειών Ορίστηκε",
-        description=f"Το σύστημα Plant / Pick Up θα λειτουργεί στο: {target.mention}",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
+            embed = discord.Embed(
+                title="🚨 Εντοπισμός Υβριστικού Μηνύματος", 
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.set_author(name=f"{message.author} ({message.author.id})", icon_url=message.author.display_avatar.url)
+            embed.add_field(name="Χρήστης", value=message.author.mention, inline=True)
+            embed.add_field(name="Κανάλι", value=message.channel.mention, inline=True)
+            embed.add_field(name="Σύνολο Παραβάσεων", value=f"⚠️ **{abuse_total}η φορά**", inline=False)
+            embed.add_field(name="Λέξη που εντοπίστηκε", value=f"`{found_word}`", inline=False)
+            embed.add_field(name="Πλήρες Μήνυμα", value=f"||{message.content}||", inline=False)
+            embed.set_footer(text=f"User ID: {message.author.id}")
+            
+            await send_log_embed(message.guild, "abuse_logs", embed)
+        except Exception as e:
+            print(f"❌ Σφάλμα κατά την καταγραφή abuse: {e}")
 
+    # ----------------------------------------------------
+    # 3. Επεξεργασία Εντολών ([]ping, []setplantchannel κλπ.)
+    # ----------------------------------------------------
+    await bot.process_commands(message)
 # -----------------------------------------
 # Commands: Setups (Async MongoDB + RAM Cache)
 # -----------------------------------------
