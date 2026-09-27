@@ -280,6 +280,11 @@ async def on_message_delete(message):
     if message.author.bot or message.guild is None:
         return
 
+    # Αγνοούμε τις αυτόματες διαγραφές στο κανάλι plant για να μην γεμίζουν τα logs
+    plant_channel_id = get_guild_setting(message.guild.id, "plant_channel")
+    if plant_channel_id and message.channel.id == plant_channel_id:
+        return
+
     embed = discord.Embed(
         title="🗑️ Διαγραφή Μηνύματος",
         description=f"Μήνυμα από {message.author.mention} διαγράφηκε στο κανάλι {message.channel.mention}.",
@@ -333,7 +338,7 @@ async def on_message(message):
     if message.author.bot or message.guild is None:
         return
 
-    # 1. Σύστημα Plant Tracker
+    # 1. Σύστημα Plant Tracker (Διαγραφή αρχικού μηνύματος και αναδημοσίευση embed)
     plant_channel_id = get_guild_setting(message.guild.id, "plant_channel")
     if plant_channel_id and message.channel.id == plant_channel_id:
         valid_extensions = ('.png', '.jpg', '.jpeg', '.webp', '.gif')
@@ -349,32 +354,46 @@ async def on_message(message):
         if is_image and plant_img:
             planted_ts = int(discord.utils.utcnow().timestamp())
 
-            embed = discord.Embed(
-                title="🌱 Κατάσταση: Φυτεύτηκε (Planted)",
-                description=f"Νέα καταγραφή από {message.author.mention}",
-                color=discord.Color.gold(),
-                timestamp=discord.utils.utcnow()
-            )
-            embed.set_author(name=f"{message.author.name}", icon_url=message.author.display_avatar.url)
-            embed.add_field(name="🕒 Ώρα Φύτευσης", value=f"<t:{planted_ts}:F> (<t:{planted_ts}:R>)", inline=False)
-            embed.set_image(url=plant_img.url)
-            embed.set_footer(text="Πάτησε το κουμπί μόλις γίνει η συγκομιδή.")
+            try:
+                # Μετατροπή της εικόνας σε Discord File ώστε να παραμείνει ακόμα και μετά τη διαγραφή
+                file_to_send = await plant_img.to_file()
 
-            view = PickUpButton(plant_id=str(message.id), planted_time=planted_ts, planter_id=message.author.id)
-            sent_msg = await message.channel.send(embed=embed, view=view)
+                embed = discord.Embed(
+                    title="🌱 Κατάσταση: Φυτεύτηκε (Planted)",
+                    description=f"Νέα καταγραφή από {message.author.mention}",
+                    color=discord.Color.gold(),
+                    timestamp=discord.utils.utcnow()
+                )
+                embed.set_author(name=f"{message.author.name}", icon_url=message.author.display_avatar.url)
+                embed.add_field(name="🕒 Ώρα Φύτευσης", value=f"<t:{planted_ts}:F> (<t:{planted_ts}:R>)", inline=False)
+                embed.set_image(url=f"attachment://{plant_img.filename}")
+                embed.set_footer(text="Πάτησε το κουμπί μόλις γίνει η συγκομιδή.")
 
-            await asyncio.to_thread(
-                plants_col.insert_one,
-                {
-                    "message_id": sent_msg.id,
-                    "guild_id": message.guild.id,
-                    "planter_id": message.author.id,
-                    "planted_time": planted_ts,
-                    "image_url": plant_img.url,
-                    "status": "planted"
-                }
-            )
-            return
+                view = PickUpButton(plant_id=str(message.id), planted_time=planted_ts, planter_id=message.author.id)
+                sent_msg = await message.channel.send(file=file_to_send, embed=embed, view=view)
+
+                # Διαγραφή του μηνύματος του χρήστη
+                try:
+                    await message.delete()
+                except discord.Forbidden:
+                    print("❌ Το bot δεν έχει δικαίωμα Manage Messages για να διαγράψει το μήνυμα.")
+
+                # Αποθήκευση στη MongoDB
+                saved_url = sent_msg.attachments[0].url if sent_msg.attachments else plant_img.url
+                await asyncio.to_thread(
+                    plants_col.insert_one,
+                    {
+                        "message_id": sent_msg.id,
+                        "guild_id": message.guild.id,
+                        "planter_id": message.author.id,
+                        "planted_time": planted_ts,
+                        "image_url": saved_url,
+                        "status": "planted"
+                    }
+                )
+                return
+            except Exception as e:
+                print(f"❌ Σφάλμα κατά τη μεταφόρτωση του plant embed: {e}")
 
     # 2. Έλεγχος Υβριστικών Λέξεων & Abuse Counter
     clean_msg = clean_text(message.content)
