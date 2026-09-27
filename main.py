@@ -310,6 +310,75 @@ async def pingeveryone(ctx, *, message: str):
     await ctx.send(f'@everyone {message}')
 
 # -----------------------------------------
+# Plant & Pick Up Tracker
+# -----------------------------------------
+
+class PickUpButton(discord.ui.View):
+    def __init__(self, plant_id: str, planted_time: int, planter_id: int):
+        super().__init__(timeout=None)  # None για να μην λήγει το κουμπί
+        self.plant_id = plant_id
+        self.planted_time = planted_time
+        self.planter_id = planter_id
+
+    @discord.ui.button(label="🌾 Pick Up (Συγκομιδή)", style=discord.ButtonStyle.success, custom_id="pickup_btn")
+    async def pickup(self, interaction: discord.Interaction, button: discord.ui.Button):
+        now_ts = int(discord.utils.utcnow().timestamp())
+        diff_minutes = (now_ts - self.planted_time) // 60
+
+        # Απενεργοποίηση του κουμπιού
+        button.disabled = True
+        button.label = "✅ Ολοκληρώθηκε"
+        button.style = discord.ButtonStyle.secondary
+
+        # Ενημέρωση του αρχικού Embed
+        embed = interaction.message.embeds[0]
+        embed.title = "🌾 Κατάσταση: Μαζεύτηκε (Picked Up)"
+        embed.color = discord.Color.green()
+
+        embed.add_field(
+            name="🧺 Συγκομιδή από",
+            value=f"{interaction.user.mention} (<t:{now_ts}:T>)",
+            inline=False
+        )
+        embed.add_field(
+            name="⏳ Χρόνος Ανάπτυξης",
+            value=f"**{diff_minutes}** λεπτά",
+            inline=True
+        )
+
+        # Αποθήκευση στη MongoDB στο background
+        await asyncio.to_thread(
+            db["plants_data"].update_one,
+            {"message_id": interaction.message.id},
+            {
+                "$set": {
+                    "status": "picked_up",
+                    "picked_by": interaction.user.id,
+                    "picked_time": now_ts,
+                    "duration_minutes": diff_minutes
+                }
+            },
+            upsert=True
+        )
+
+        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.followup.send(f"✅ {interaction.user.mention}, καταγράφηκε η συγκομιδή!", ephemeral=True)
+
+
+# Εντολή για να ορίσεις το κανάλι όπου θα λειτουργεί το plant system
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setplantchannel(ctx, channel: discord.TextChannel = None):
+    target = channel or ctx.channel
+    await async_update_setting(ctx.guild.id, "plant_channel", target.id)
+    embed = discord.Embed(
+        title="🌱 Κανάλι Φυτειών Ορίστηκε",
+        description=f"Το σύστημα Plant / Pick Up θα λειτουργεί στο: {target.mention}",
+        color=discord.Color.green()
+    )
+    await ctx.send(embed=embed)
+
+# -----------------------------------------
 # Commands: Setups (Async MongoDB + RAM Cache)
 # -----------------------------------------
 @bot.command()
