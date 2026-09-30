@@ -9,7 +9,7 @@ from flask import Flask
 from pymongo import MongoClient
 
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 # -----------------------------------------
 # Web Server (Keep-Alive for Render)
@@ -18,7 +18,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is online with MongoDB & Plant Tracker!"
+    return "Bot is online with MongoDB, Plant Tracker & Smart Reminders!"
 
 def run():
     port = int(os.environ.get("PORT", 8080))
@@ -35,7 +35,6 @@ load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
 mongo_uri = os.getenv('MONGO_URI')
 
-# Connect to MongoDB Atlas
 mongo_client = MongoClient(mongo_uri)
 db = mongo_client["discord_bot_db"]
 configs_col = db["server_configs"]
@@ -50,7 +49,7 @@ intents.moderation = True
 bot = commands.Bot(command_prefix='[]', intents=intents, case_insensitive=True)
 
 # -----------------------------------------
-# RAM Cache & Async Helpers (Ping Optimization)
+# RAM Cache & Async Helpers
 # -----------------------------------------
 GUILD_CACHE = {}
 
@@ -131,21 +130,54 @@ BANNED_WORDS = {
 }
 
 # -----------------------------------------
-# UI Components: Plant / Pick Up Button
+# UI: DM Response Button
 # -----------------------------------------
-class PickUpButton(discord.ui.View):
-    def __init__(self, plant_id: str, planted_time: int, planter_id: int):
+class DMResponseButton(discord.ui.View):
+    def __init__(self, message_id: int):
+        super().__init__(timeout=None)
+        self.message_id = message_id
+
+    @discord.ui.button(label="✅ I'm on it! (Confirm Harvest)", style=discord.ButtonStyle.success)
+    async def confirm_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        button.disabled = True
+        button.label = "✅ Confirmed"
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("Roger that! Go pick up the plants.", ephemeral=True)
+        
+        # Mark as responded so it won't ping @everyone
+        await asyncio.to_thread(
+            plants_col.update_one,
+            {"message_id": self.message_id},
+            {"$set": {"dm_confirmed": True}}
+        )
+
+# -----------------------------------------
+# UI: Plant Interactive Buttons (Pick Up & Ownership)
+# -----------------------------------------
+class PlantView(discord.ui.View):
+    def __init__(self, plant_id: str, planted_time: int, planter_id: int, is_released: bool = False):
         super().__init__(timeout=None)
         self.plant_id = plant_id
         self.planted_time = planted_time
         self.planter_id = planter_id
+        self.is_released = is_released
+
+        # Dynamic label & style based on release state
+        if self.is_released:
+            self.owner_btn.label = "✋ Claim Ownership"
+            self.owner_btn.style = discord.ButtonStyle.primary
+        else:
+            self.owner_btn.label = "🔓 Release Ownership"
+            self.owner_btn.style = discord.ButtonStyle.secondary
 
     @discord.ui.button(label="🌾 Pick Up (Harvest)", style=discord.ButtonStyle.success, custom_id="pickup_btn")
     async def pickup(self, interaction: discord.Interaction, button: discord.ui.Button):
         now_ts = int(discord.utils.utcnow().timestamp())
         diff_minutes = (now_ts - self.planted_time) // 60
 
-        button.disabled = True
+        # Disable all buttons
+        for child in self.children:
+            child.disabled = True
         button.label = "✅ Completed"
         button.style = discord.ButtonStyle.secondary
 
@@ -181,12 +213,154 @@ class PickUpButton(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(f"✅ {interaction.user.mention}, harvest logged successfully!", ephemeral=True)
 
+    @discord.ui.button(label="🔓 Release Ownership", style=discord.ButtonStyle.secondary, custom_id="ownership_btn")
+    async def toggle_ownership(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = interaction.message.embeds[0]
+
+        # Case 1: Owner releases ownership
+        if not self.is_released:
+            if interaction.user.id != self.planter_id and not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("❌ Only the owner can release this plant!", ephemeral=True)
+                return
+
+            self.is_released = True
+            button.label = "✋ Claim Ownership"
+            button.style = discord.ButtonStyle.primary
+
+            embed.description = f"⚠️ **Plant is now OPEN! Anyone can claim ownership.**"
+            await asyncio.to_thread(
+                plants_col.update_one,
+                {"message_id": interaction.message.id},
+                {"$set": {"is_released": True}}
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.followup.send("🔓 Ownership released!", ephemeral=True)
+
+        # Case 2: Another user claims ownership
+        else:
+            self.is_released = False
+            self.planter_id = interaction.user.id
+            button.label = "🔓 Release Ownership"
+            button.style = discord.ButtonStyle.secondary
+
+            embed.description = f"New owner: {interaction.user.mention}"
+            await asyncio.to_thread(
+                plants_col.update_one,
+                {"message_id": interaction.message.id},
+                {"$set": {"is_released": False, "planter_id": interaction.user.id}}
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.followup.send(f"✋ You claimed ownership! You will receive future reminders.", ephemeral=True)
+
+    @property
+    def owner_btn(self):
+        return self.children[1]
+
+# -----------------------------------------
+# Background Task: Multi-Tier Plant Reminders
+# -----------------------------------------
+@tasks.loop(minutes=1)
+async def check_plant_reminders():
+    try:
+        now_ts = int(discord.utils.utcnow().timestamp())
+        
+        # 15 min before (2h 45m = 9900s)
+        time_for_dm = 9900
+        # 10 min before / 5 min after DM (2h 50m = 10200s)
+        time_for_everyone = 10200
+
+        cursor = await asyncio.to_thread(
+            plants_col.find,
+            {"status": "planted"}
+        )
+        plants = await asyncio.to_thread(list, cursor)
+
+        for plant in plants:
+            guild = bot.get_guild(plant.get("guild_id"))
+            if not guild:
+                continue
+
+            plant_channel_id = get_guild_setting(guild.id, "plant_channel")
+            if not plant_channel_id:
+                continue
+
+            channel = guild.get_channel(plant_channel_id)
+            if not channel:
+                continue
+
+            planted_time = plant.get("planted_time", 0)
+            elapsed = now_ts - planted_time
+            msg_id = plant.get("message_id")
+            jump_url = f"https://discord.com/channels/{guild.id}/{channel.id}/{msg_id}"
+            planter_id = plant.get("planter_id")
+
+            # --- STEP 1: Send DM 15 minutes before readiness ---
+            if elapsed >= time_for_dm and not plant.get("dm_sent", False):
+                owner = guild.get_member(planter_id)
+                if owner:
+                    try:
+                        dm_embed = discord.Embed(
+                            title="🌿 Plant Reminder: 15 Minutes Remaining!",
+                            description=(
+                                f"Hey {owner.name}! Your plant in **{guild.name}** will be ready in 15 minutes!\n\n"
+                                f"👉 **[Jump to Plant Record]({jump_url})**\n\n"
+                                f"Please click the button below within 5 minutes, otherwise `@everyone` will be notified to pick it up!"
+                            ),
+                            color=discord.Color.gold()
+                        )
+                        if plant.get("image_url"):
+                            dm_embed.set_thumbnail(url=plant.get("image_url"))
+
+                        await owner.send(embed=dm_embed, view=DMResponseButton(message_id=msg_id))
+                    except discord.Forbidden:
+                        print(f"⚠️ Could not send DM to {owner.name} (DMs are closed).")
+
+                # Mark DM as sent
+                await asyncio.to_thread(
+                    plants_col.update_one,
+                    {"_id": plant["_id"]},
+                    {"$set": {"dm_sent": True, "dm_sent_time": now_ts}}
+                )
+
+            # --- STEP 2: Ping @everyone if no answer within 5 minutes ---
+            if elapsed >= time_for_everyone and plant.get("dm_sent", False) and not plant.get("everyone_pinged", False):
+                # Check if user responded to the DM
+                if not plant.get("dm_confirmed", False):
+                    embed = discord.Embed(
+                        title="⚠️ Unclaimed Plant Alert (~10 Minutes Left)",
+                        description=(
+                            f"The current planter (<@{planter_id}>) did not respond in time!\n\n"
+                            f"🌾 **Plants will be ready in 10 minutes.** Anyone can go and harvest them!\n"
+                            f"👉 **[Jump to Plant Record]({jump_url})**"
+                        ),
+                        color=discord.Color.red(),
+                        timestamp=discord.utils.utcnow()
+                    )
+                    if plant.get("image_url"):
+                        embed.set_thumbnail(url=plant.get("image_url"))
+
+                    await channel.send(
+                        content="@everyone ⚠️ Planter hasn't responded! Needs to be picked up in ~10 minutes!",
+                        embed=embed
+                    )
+
+                    await asyncio.to_thread(
+                        plants_col.update_one,
+                        {"_id": plant["_id"]},
+                        {"$set": {"everyone_pinged": True}}
+                    )
+
+    except Exception as e:
+        print(f"❌ Error in plant reminder task: {e}")
+
 # -----------------------------------------
 # Events
 # -----------------------------------------
 @bot.event
 async def on_ready():
     load_all_configs()
+    if not check_plant_reminders.is_running():
+        check_plant_reminders.start()
     print(f"Logged in as {bot.user.name} and connected to MongoDB!")
 
 # Server Logs & Auto-Role
@@ -225,7 +399,7 @@ async def on_member_remove(member):
     embed.set_footer(text=f"ID: {member.id}")
     await send_log_embed(member.guild, "server_logs", embed)
 
-# Roles Logs & Timeouts (Abuse Logs)
+# Roles Logs & Timeouts
 @bot.event
 async def on_member_update(before, after):
     now = datetime.now(timezone.utc)
@@ -280,7 +454,6 @@ async def on_message_delete(message):
     if message.author.bot or message.guild is None:
         return
 
-    # Ignore automated plant uploads from deletion logs
     plant_channel_id = get_guild_setting(message.guild.id, "plant_channel")
     if plant_channel_id and message.channel.id == plant_channel_id:
         return
@@ -366,15 +539,15 @@ async def on_message(message):
                 embed.set_author(name=f"{message.author.name}", icon_url=message.author.display_avatar.url)
                 embed.add_field(name="🕒 Planted Time", value=f"<t:{planted_ts}:F> (<t:{planted_ts}:R>)", inline=False)
                 embed.set_image(url=f"attachment://{plant_img.filename}")
-                embed.set_footer(text="Click the button below once harvested.")
+                embed.set_footer(text="Click Pick Up when harvested, or Release Ownership to pass it to someone else.")
 
-                view = PickUpButton(plant_id=str(message.id), planted_time=planted_ts, planter_id=message.author.id)
+                view = PlantView(plant_id=str(message.id), planted_time=planted_ts, planter_id=message.author.id)
                 sent_msg = await message.channel.send(file=file_to_send, embed=embed, view=view)
 
                 try:
                     await message.delete()
                 except discord.Forbidden:
-                    print("❌ Missing Manage Messages permission to delete the user's upload.")
+                    print("❌ Missing Manage Messages permission to delete original message.")
 
                 saved_url = sent_msg.attachments[0].url if sent_msg.attachments else plant_img.url
                 await asyncio.to_thread(
@@ -385,7 +558,11 @@ async def on_message(message):
                         "planter_id": message.author.id,
                         "planted_time": planted_ts,
                         "image_url": saved_url,
-                        "status": "planted"
+                        "status": "planted",
+                        "is_released": False,
+                        "dm_sent": False,
+                        "dm_confirmed": False,
+                        "everyone_pinged": False
                     }
                 )
                 return
@@ -471,7 +648,7 @@ async def setleave(ctx, channel: discord.TextChannel = None):
 @commands.has_permissions(administrator=True)
 async def setautorole(ctx, role: discord.Role):
     await async_update_setting(ctx.guild.id, "autorole", role.id)
-    embed = discord.Embed(title="🛡️ Auto-Role Set", description=f"Role: {role.mention}", color=discord.Color.purple())
+    embed = discord.Embed(title="🛡️️ Auto-Role Set", description=f"Role: {role.mention}", color=discord.Color.purple())
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -545,9 +722,6 @@ async def admin_perms_error(ctx, error):
 
 # -----------------------------------------
 # Start Bot
-# -----------------------------------------
-keep_alive()
-bot.run(token)
 # -----------------------------------------
 keep_alive()
 bot.run(token)
